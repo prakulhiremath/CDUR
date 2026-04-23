@@ -1,0 +1,442 @@
+# ================== INSTALL ==================
+# !pip install -q groq matplotlib
+
+# ================== SETUP ==================
+from groq import Groq
+from google.colab import userdata
+import json, re, numpy as np, pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+import time
+
+client = Groq(api_key=userdata.get("GROQ_API_KEY"))
+
+# Two models — small vs large, same family
+MODELS = [
+    {"id": "llama-3.1-8b-instant",   "label": "Llama-3.1-8B"},
+    {"id": "llama-3.3-70b-versatile", "label": "Llama-3.3-70B"},
+]
+
+# ================== NOVEL TRAP QUESTIONS ==================
+# These use invented names, custom numbers, and multi-hop chains
+# so the model cannot rely on memorized CRT-style answers.
+# Each has a plausible wrong reasoning path described in "trap".
+
+QUESTIONS = [
+
+    # ── Multi-hop arithmetic with a tempting shortcut ──────────────────
+    {
+        "q": ("Warehouse A holds 3 times as many boxes as Warehouse B. "
+              "Warehouse B holds 40 more boxes than Warehouse C. "
+              "Warehouse C holds 60 boxes. "
+              "How many boxes does Warehouse A hold?"),
+        "a": "300",
+        "tier": "trap",
+        "trap": "adds 40+60=100 and triples that → 300 is correct, but many stop at B=100 and forget to triple"
+    },
+    {
+        "q": ("A train leaves city X at 08:00 travelling at 90 km/h. "
+              "Another train leaves city X at 09:30 on the same track "
+              "travelling at 120 km/h. "
+              "How many minutes after 09:30 does the second train catch the first?"),
+        "a": "270",
+        "tier": "trap",
+        "trap": "forgets the 1.5 hr head-start distance; just divides speed difference"
+    },
+    {
+        "q": ("A shop sells apples for $0.40 each and oranges for $0.65 each. "
+              "Maria buys 7 apples and some oranges. She pays exactly $6.75. "
+              "How many oranges did she buy?"),
+        "a": "7",
+        "tier": "trap",
+        "trap": "arithmetic error: 7×0.40=2.80; 6.75-2.80=3.95; 3.95/0.65=6.07 → rounds to 6"
+    },
+
+    # ── Percentage / ratio traps ───────────────────────────────────────
+    {
+        "q": ("A factory produces 800 units in January. "
+              "Production rises 25% in February, then falls 20% in March. "
+              "What is March production?"),
+        "a": "800",
+        "tier": "trap",
+        "trap": "+25% then -20% feels like net +5% → says 840"
+    },
+    {
+        "q": ("In a class, 60% of students passed maths and 70% passed English. "
+              "At least what percentage passed both subjects?"),
+        "a": "30",
+        "tier": "trap",
+        "trap": "multiplies 0.6×0.7=0.42 (assumes independence) → says 42%"
+    },
+    {
+        "q": ("A solution is 40% alcohol by volume. You add pure water "
+              "until the solution is 25% alcohol. "
+              "If you started with 200 ml, how many ml of water did you add?"),
+        "a": "120",
+        "tier": "trap",
+        "trap": "sets up wrong proportion; common error gives 80 ml"
+    },
+
+    # ── Logic / conditional reasoning traps ───────────────────────────
+    {
+        "q": ("All Blorps are Quivs. No Quivs are Zents. "
+              "Is it possible that some Blorps are Zents? "
+              "Answer yes or no."),
+        "a": "no",
+        "tier": "trap",
+        "trap": "invented words confuse model; some say yes"
+    },
+    {
+        "q": ("If it rains, the match is cancelled. "
+              "The match was not cancelled. "
+              "Did it rain? Answer yes or no."),
+        "a": "no",
+        "tier": "trap",
+        "trap": "model sometimes says 'cannot determine' or 'yes'"
+    },
+    {
+        "q": ("Every Florn is heavier than every Grux. "
+              "Every Grux is heavier than every Plib. "
+              "Is every Florn heavier than every Plib? "
+              "Answer yes or no."),
+        "a": "yes",
+        "tier": "trap",
+        "trap": "invented names cause hesitation; model hedges with 'cannot determine'"
+    },
+
+    # ── Sequence / counting traps ──────────────────────────────────────
+    {
+        "q": ("How many integers from 1 to 100 inclusive are divisible by "
+              "either 3 or 5 but NOT both?"),
+        "a": "47",
+        "tier": "trap",
+        "trap": "counts divisible-by-3 + divisible-by-5 without excluding divisible-by-15, or wrong inclusion-exclusion"
+    },
+    {
+        "q": ("A frog is at the bottom of a 12-metre well. "
+              "Each day it climbs 3 metres; each night it slides back 2 metres. "
+              "On which day does it first reach the top?"),
+        "a": "10",
+        "tier": "trap",
+        "trap": "uses 12/(3-2)=12 days; ignores that it escapes during the day on day 10"
+    },
+    {
+        "q": ("You flip a fair coin 4 times and get heads every time. "
+              "What is the probability the next flip is heads? "
+              "Answer as a fraction."),
+        "a": "1/2",
+        "tier": "trap",
+        "trap": "gambler's fallacy: says 1/32 or lower because 'due for tails'"
+    },
+
+    # ── Spatial / physical intuition traps ────────────────────────────
+    {
+        "q": ("A cube has side length 3 cm. You paint all its faces red, "
+              "then cut it into 1 cm³ unit cubes. "
+              "How many unit cubes have exactly two red faces?"),
+        "a": "12",
+        "tier": "trap",
+        "trap": "counts edge cubes incorrectly; common wrong answers are 8 or 24"
+    },
+    {
+        "q": ("A rectangle has perimeter 36 cm. Its length is twice its width. "
+              "What is its area in cm²?"),
+        "a": "72",
+        "tier": "trap",
+        "trap": "solves perimeter correctly (w=6, l=12) but multiplies wrong → 70 or 68"
+    },
+
+    # ── Easy controls (calibration anchor) ────────────────────────────
+    {
+        "q": "What is the capital of Australia?",
+        "a": "Canberra",
+        "tier": "easy",
+        "trap": "none"
+    },
+    {
+        "q": "What is 15% of 200?",
+        "a": "30",
+        "tier": "easy",
+        "trap": "none"
+    },
+    {
+        "q": "How many sides does a hexagon have?",
+        "a": "6",
+        "tier": "easy",
+        "trap": "none"
+    },
+]
+
+# ================== BUDGETS ==================
+BUDGETS = [
+    {"label": "no_reasoning",     "max_tokens": 80,
+     "instruction": "Answer immediately. No reasoning. Output JSON only."},
+    {"label": "light_reasoning",  "max_tokens": 350,
+     "instruction": "Think briefly (1–2 sentences), then answer."},
+    {"label": "medium_reasoning", "max_tokens": 800,
+     "instruction": "Think step-by-step before answering."},
+    {"label": "heavy_reasoning",  "max_tokens": 1800,
+     "instruction": "Reason very carefully and extensively before answering."},
+]
+
+# ================== HELPERS ==================
+def normalize(s):
+    return re.sub(r"[^a-z0-9./]", "", str(s).lower())
+
+def is_correct(pred, target):
+    p, t = normalize(pred), normalize(target)
+    return p == t or t in p or p in t
+
+def binned_ece(confidences, corrects, n_bins=5):
+    confidences = np.array(confidences, dtype=float)
+    corrects    = np.array(corrects,    dtype=float)
+    edges       = np.linspace(0, 1, n_bins + 1)
+    ece, bin_data = 0.0, []
+    for i in range(n_bins):
+        lo, hi = edges[i], edges[i+1]
+        mask   = (confidences >= lo) & (confidences < hi)
+        if mask.sum() == 0:
+            bin_data.append({"mid": (lo+hi)/2, "acc": None, "conf": None, "n": 0})
+            continue
+        ba = corrects[mask].mean()
+        bc = confidences[mask].mean()
+        ece += (mask.sum()/len(confidences)) * abs(bc - ba)
+        bin_data.append({"mid": (lo+hi)/2, "acc": round(float(ba),3),
+                         "conf": round(float(bc),3), "n": int(mask.sum())})
+    return round(ece, 4), bin_data
+
+def query_model(question, budget, model_id):
+    prompt = f"""{budget['instruction']}
+
+Question: {question}
+
+After your reasoning (if any), output ONLY this JSON on the LAST line:
+{{"answer":"<your answer>","confidence":<float 0.0-1.0>}}
+
+Confidence guide — be honest:
+0.5 = genuinely unsure
+0.7 = somewhat confident
+0.85 = confident
+0.95 = very confident
+1.0 = absolutely certain"""
+
+    try:
+        r = client.chat.completions.create(
+            model=model_id,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=budget["max_tokens"],
+            temperature=0.3,
+        )
+        raw = r.choices[0].message.content.strip()
+        matches = re.findall(r'\{[^{}]+\}', raw)
+        if not matches:
+            return "", 0.5, raw
+        parsed = json.loads(matches[-1])
+        answer = str(parsed.get("answer", ""))
+        conf   = max(0.0, min(1.0, float(parsed.get("confidence", 0.5))))
+        return answer, conf, raw
+    except Exception as e:
+        return "", 0.5, str(e)
+
+# ================== RUN ==================
+results = []
+total = len(MODELS) * len(BUDGETS) * len(QUESTIONS)
+print(f"Total API calls: {total}\n")
+
+for model in MODELS:
+    print(f"\n{'='*60}")
+    print(f"MODEL: {model['label']}")
+    print('='*60)
+    for budget in BUDGETS:
+        print(f"\n  Budget: {budget['label']} (max_tokens={budget['max_tokens']})")
+        for q in QUESTIONS:
+            answer, conf, _ = query_model(q["q"], budget, model["id"])
+            corr = int(is_correct(answer, q["a"]))
+            results.append({
+                "model":        model["label"],
+                "budget":       budget["label"],
+                "max_tokens":   budget["max_tokens"],
+                "question":     q["q"][:55],
+                "tier":         q["tier"],
+                "trap":         q["trap"],
+                "expected":     q["a"],
+                "predicted":    answer,
+                "confidence":   conf,
+                "correct":      corr,
+            })
+            status = "✓" if corr else "✗"
+            print(f"    {status} conf={conf:.2f} | {q['q'][:48]} | Got: {answer[:18]}")
+            time.sleep(0.3)   # avoid rate limit
+
+df = pd.DataFrame(results)
+
+# ================== METRICS ==================
+print("\n\n" + "="*80)
+print(f"{'Model':<18} {'Budget':<22} {'Acc':>6} {'Conf':>6} {'ECE':>7} {'Overconf':>10}")
+print("="*80)
+
+summary_rows = []
+for model in MODELS:
+    for budget in BUDGETS:
+        sub = df[(df["model"]==model["label"]) & (df["budget"]==budget["label"])]
+        if len(sub)==0: continue
+        acc  = round(sub["correct"].mean(), 3)
+        conf = round(sub["confidence"].mean(), 3)
+        ece, _ = binned_ece(sub["confidence"].tolist(), sub["correct"].tolist())
+        over = round(conf - acc, 3)
+        tag  = "OVERCONF" if over>0.05 else ("underconf" if over<-0.05 else "calibrated")
+        summary_rows.append({"model": model["label"], "budget": budget["label"],
+                              "acc": acc, "conf": conf, "ece": ece, "overconf": over})
+        print(f"{model['label']:<18} {budget['label']:<22} {acc:>6} {conf:>6} {ece:>7} {over:>8}  {tag}")
+    print()
+
+# Trap-only
+print("\nTRAP questions only:")
+print(f"{'Model':<18} {'Budget':<22} {'Acc':>6} {'Conf':>6} {'ECE':>7} {'Overconf':>10}")
+print("-"*70)
+trap_rows = []
+for model in MODELS:
+    for budget in BUDGETS:
+        sub = df[(df["model"]==model["label"]) & (df["budget"]==budget["label"]) & (df["tier"]=="trap")]
+        if len(sub)==0: continue
+        acc  = round(sub["correct"].mean(), 3)
+        conf = round(sub["confidence"].mean(), 3)
+        ece, _ = binned_ece(sub["confidence"].tolist(), sub["correct"].tolist())
+        over = round(conf - acc, 3)
+        trap_rows.append({"model": model["label"], "budget": budget["label"],
+                           "acc": acc, "conf": conf, "ece": ece, "overconf": over})
+        print(f"{model['label']:<18} {budget['label']:<22} {acc:>6} {conf:>6} {ece:>7} {over:>8}")
+    print()
+
+# ================== PLOTS ==================
+budget_labels = [b["label"].replace("_","\n") for b in BUDGETS]
+bx = np.arange(len(BUDGETS))
+colors_model = ["#5DCAA5", "#7F77DD"]   # green=8B, purple=70B
+
+fig, axes = plt.subplots(3, 4, figsize=(20, 14))
+fig.suptitle("CoT Reasoning Budget vs Calibration\nLlama-3.1-8B vs Llama-3.3-70B — Novel Trap Questions",
+             fontsize=14, fontweight="bold")
+
+for mi, model in enumerate(MODELS):
+    m_trap = [r for r in trap_rows if r["model"]==model["label"]]
+    m_all  = [r for r in summary_rows if r["model"]==model["label"]]
+
+    accs      = [r["acc"]      for r in m_all]
+    confs     = [r["conf"]     for r in m_all]
+    eces      = [r["ece"]      for r in m_all]
+    overconfs = [r["overconf"] for r in m_all]
+    t_eces    = [r["ece"]      for r in m_trap]
+    t_overs   = [r["overconf"] for r in m_trap]
+
+    # Row 0: Acc vs Conf
+    ax = axes[0][mi*2]
+    w = 0.35
+    ax.bar(bx-w/2, accs,  w, color="#5DCAA5", alpha=0.85, label="Accuracy")
+    ax.bar(bx+w/2, confs, w, color="#7F77DD", alpha=0.85, label="Confidence")
+    ax.set_title(f"{model['label']}\nAcc vs Conf (all Q)")
+    ax.set_xticks(bx); ax.set_xticklabels(budget_labels, fontsize=7)
+    ax.set_ylim(0, 1.15); ax.legend(fontsize=7); ax.set_ylabel("Score")
+
+    # Row 0: ECE all
+    ax = axes[0][mi*2+1]
+    ec = ["#5DCAA5" if e<0.1 else "#EF9F27" if e<0.2 else "#E24B4A" for e in eces]
+    ax.bar(bx, eces, color=ec, alpha=0.85)
+    ax.set_title(f"{model['label']}\nECE (all Q)")
+    ax.set_xticks(bx); ax.set_xticklabels(budget_labels, fontsize=7); ax.set_ylabel("ECE")
+
+    # Row 1: Trap ECE  ← the key chart
+    ax = axes[1][mi*2]
+    tc = ["#5DCAA5" if e<0.1 else "#EF9F27" if e<0.2 else "#E24B4A" for e in t_eces]
+    ax.bar(bx, t_eces, color=tc, alpha=0.85)
+    ax.set_title(f"{model['label']}\n★ ECE on TRAP questions ★")
+    ax.set_xticks(bx); ax.set_xticklabels(budget_labels, fontsize=7); ax.set_ylabel("ECE")
+
+    # Row 1: Overconfidence gap (trap)
+    ax = axes[1][mi*2+1]
+    oc = ["#E24B4A" if o>0.05 else "#5DCAA5" if o<-0.05 else "#888780" for o in t_overs]
+    ax.bar(bx, t_overs, color=oc, alpha=0.85)
+    ax.axhline(0,     color="black",  linewidth=0.8)
+    ax.axhline(0.05,  color="orange", linestyle="--", linewidth=0.8)
+    ax.axhline(-0.05, color="orange", linestyle="--", linewidth=0.8)
+    ax.set_title(f"{model['label']}\nOverconfidence gap (trap)")
+    ax.set_xticks(bx); ax.set_xticklabels(budget_labels, fontsize=7); ax.set_ylabel("Conf−Acc")
+
+# Row 2: Side-by-side trap ECE comparison across models
+ax = axes[2][0]
+w = 0.35
+for mi, model in enumerate(MODELS):
+    m_trap = [r for r in trap_rows if r["model"]==model["label"]]
+    t_eces = [r["ece"] for r in m_trap]
+    offset = (mi - 0.5) * w
+    ax.bar(bx + offset, t_eces, w, color=colors_model[mi], alpha=0.85, label=model["label"])
+ax.set_title("TRAP ECE: 8B vs 70B\n(key cross-model comparison)")
+ax.set_xticks(bx); ax.set_xticklabels(budget_labels, fontsize=7)
+ax.set_ylabel("ECE"); ax.legend(fontsize=8)
+
+# Row 2: Side-by-side overconfidence gap (trap)
+ax = axes[2][1]
+for mi, model in enumerate(MODELS):
+    m_trap = [r for r in trap_rows if r["model"]==model["label"]]
+    t_overs = [r["overconf"] for r in m_trap]
+    offset  = (mi - 0.5) * w
+    ax.bar(bx + offset, t_overs, w, color=colors_model[mi], alpha=0.85, label=model["label"])
+ax.axhline(0,     color="black",  linewidth=0.8)
+ax.axhline(0.05,  color="orange", linestyle="--", linewidth=0.8, label="+0.05 threshold")
+ax.axhline(-0.05, color="orange", linestyle="--", linewidth=0.8)
+ax.set_title("Overconfidence gap: 8B vs 70B\n(trap questions)")
+ax.set_xticks(bx); ax.set_xticklabels(budget_labels, fontsize=7)
+ax.set_ylabel("Conf−Acc"); ax.legend(fontsize=7)
+
+# Row 2: Reliability diagram — 70B heavy reasoning (the interesting condition)
+ax = axes[2][2]
+sub70h = df[(df["model"]=="Llama-3.3-70B") & (df["budget"]=="heavy_reasoning")]
+if len(sub70h):
+    _, bd = binned_ece(sub70h["confidence"].tolist(), sub70h["correct"].tolist(), n_bins=8)
+    mids  = [b["mid"]  for b in bd if b["acc"] is not None]
+    baccs = [b["acc"]  for b in bd if b["acc"] is not None]
+    bconfs= [b["conf"] for b in bd if b["acc"] is not None]
+    ns    = [b["n"]    for b in bd if b["acc"] is not None]
+    ax.plot([0,1],[0,1],"k--",linewidth=1,label="Perfect")
+    ax.bar(mids, baccs, width=0.1, alpha=0.5, color="#7F77DD", label="Acc in bin")
+    ax.scatter(bconfs, baccs, color="#E24B4A", zorder=5, s=60)
+    for m,a,n in zip(mids,baccs,ns):
+        ax.annotate(f"n={n}",(m,a+0.04),fontsize=6,ha="center",color="gray")
+    ax.set_xlim(0,1); ax.set_ylim(0,1.15)
+    ax.set_title("Reliability: 70B Heavy Reasoning")
+    ax.set_xlabel("Confidence"); ax.set_ylabel("Accuracy"); ax.legend(fontsize=7)
+
+# Row 2: Reliability diagram — 8B heavy reasoning
+ax = axes[2][3]
+sub8h = df[(df["model"]=="Llama-3.1-8B") & (df["budget"]=="heavy_reasoning")]
+if len(sub8h):
+    _, bd = binned_ece(sub8h["confidence"].tolist(), sub8h["correct"].tolist(), n_bins=8)
+    mids  = [b["mid"]  for b in bd if b["acc"] is not None]
+    baccs = [b["acc"]  for b in bd if b["acc"] is not None]
+    bconfs= [b["conf"] for b in bd if b["acc"] is not None]
+    ns    = [b["n"]    for b in bd if b["acc"] is not None]
+    ax.plot([0,1],[0,1],"k--",linewidth=1,label="Perfect")
+    ax.bar(mids, baccs, width=0.1, alpha=0.5, color="#5DCAA5", label="Acc in bin")
+    ax.scatter(bconfs, baccs, color="#E24B4A", zorder=5, s=60)
+    for m,a,n in zip(mids,baccs,ns):
+        ax.annotate(f"n={n}",(m,a+0.04),fontsize=6,ha="center",color="gray")
+    ax.set_xlim(0,1); ax.set_ylim(0,1.15)
+    ax.set_title("Reliability: 8B Heavy Reasoning")
+    ax.set_xlabel("Confidence"); ax.set_ylabel("Accuracy"); ax.legend(fontsize=7)
+
+plt.tight_layout()
+plt.savefig("cross_model_calibration.png", dpi=150, bbox_inches="tight")
+plt.show()
+print("\nPlot saved to cross_model_calibration.png")
+
+# ================== SMOKING GUN ==================
+print("\n--- Wrong + high confidence (≥0.85) across both models ---")
+wc = df[(df["correct"]==0) & (df["confidence"]>=0.85)]
+if len(wc):
+    print(wc[["model","budget","question","expected","predicted","confidence","trap"]]
+          .to_string(index=False))
+else:
+    print("None — consider harder questions or lower threshold to 0.70")
+
+# ================== SAVE CSV ==================
+df.to_csv("cross_model_results.csv", index=False)
+print("\nRaw results saved to cross_model_results.csv")
