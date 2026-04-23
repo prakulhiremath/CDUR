@@ -1,0 +1,119 @@
+# ================== INSTALL ==================
+!pip install -q groq
+
+# ================== IMPORTS ==================
+from groq import Groq
+from google.colab import userdata
+import json, re, numpy as np, pandas as pd
+
+# ================== CLIENT ==================
+client = Groq(api_key=userdata.get("GROQ_API_KEY"))
+MODEL = "llama-3.1-8b-instant"
+
+# ================== DATA ==================
+QUESTIONS = [
+  {"q": "Capital of France?", "a": "Paris"},
+  {"q": "2+2?", "a": "4"},
+  {"q": "Largest planet?", "a": "Jupiter"},
+  {"q": "Who wrote Hamlet?", "a": "Shakespeare"},
+  {"q": "Speed of light?", "a": "299792458"},
+  {"q": "Chemical symbol for water?", "a": "H2O"},
+  {"q": "Square root of 81?", "a": "9"},
+  {"q": "Author of 1984?", "a": "George Orwell"},
+  {"q": "Capital of Japan?", "a": "Tokyo"},
+  {"q": "5*6?", "a": "30"},
+  {"q": "Largest ocean?", "a": "Pacific"},
+  {"q": "Human DNA shape?", "a": "double helix"},
+  {"q": "3^3?", "a": "27"},
+  {"q": "First element in periodic table?", "a": "Hydrogen"},
+  {"q": "Currency of UK?", "a": "Pound"}
+]
+
+BUDGETS = [0, 512, 2048]
+
+# ================== HELPERS ==================
+def normalize(s):
+    return re.sub(r"[^a-z0-9]", "", str(s).lower())
+
+def is_correct(pred, truth):
+    return normalize(pred) == normalize(truth)
+
+def compute_ece(conf, corr, bins=10):
+    bins_arr = np.linspace(0,1,bins+1)
+    ece = 0
+    n = len(conf)
+    for i in range(bins):
+        mask = (conf >= bins_arr[i]) & (conf < bins_arr[i+1])
+        if mask.sum()==0:
+            continue
+        acc = corr[mask].mean()
+        c = conf[mask].mean()
+        ece += (mask.sum()/n)*abs(acc-c)
+    return ece
+
+# ================== QUERY ==================
+def query_model(question, budget):
+    reasoning = "Answer directly." if budget == 0 else "Think step-by-step before answering."
+
+    prompt = f"""
+{reasoning}
+
+Return ONLY JSON:
+{{"answer": "...", "confidence": 0-1}}
+
+Question: {question}
+"""
+
+    try:
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0
+        )
+
+        text = response.choices[0].message.content
+        text = re.sub(r"```(?:json)?", "", text).strip()
+
+        data = json.loads(text)
+
+        return data.get("answer",""), float(data.get("confidence",0.5))
+
+    except Exception as e:
+        print("ERROR:", e)
+        return "", 0.5
+
+# ================== RUN ==================
+results = []
+
+for b in BUDGETS:
+    print(f"\nRunning budget {b}")
+
+    for q in QUESTIONS:
+        ans, conf = query_model(q["q"], b)
+        correct = is_correct(ans, q["a"])
+
+        results.append({
+            "budget": b,
+            "question": q["q"],
+            "answer": ans,
+            "confidence": conf,
+            "correct": int(correct)
+        })
+
+# ================== ANALYSIS ==================
+df = pd.DataFrame(results)
+
+print("\n=== SAMPLE OUTPUT ===")
+print(df.head())
+
+print("\n=== METRICS ===")
+for b in sorted(df["budget"].unique()):
+    sub = df[df["budget"] == b]
+
+    print(
+        "Budget:", b,
+        "| Acc:", round(sub["correct"].mean(), 3),
+        "| Conf:", round(sub["confidence"].mean(), 3),
+        "| ECE:", round(compute_ece(sub["confidence"].values,
+                                   sub["correct"].values), 3)
+    )
