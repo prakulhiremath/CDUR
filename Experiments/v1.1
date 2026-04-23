@@ -1,0 +1,355 @@
+# ================== INSTALL ==================
+# !pip install -q groq matplotlib
+
+# ================== SETUP ==================
+from groq import Groq
+from google.colab import userdata
+import json, re, numpy as np, pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+
+client = Groq(api_key=userdata.get("GROQ_API_KEY"))
+MODEL = "llama-3.1-8b-instant"
+
+# ================== QUESTIONS ==================
+# Reasoning-trap questions: a plausible wrong chain exists.
+# The model "reasons" its way to a confident wrong answer.
+# Correct answers are exact strings your norm() will match.
+
+QUESTIONS = [
+    # --- Cognitive Reflection Test (CRT) style ---
+    # Trap: "bat costs $1 more" → brain anchors to ball=$0.10
+    {
+        "q": "A bat and ball together cost $1.10. The bat costs $1.00 more than the ball. How much does the ball cost in cents?",
+        "a": "5",
+        "tier": "trap",
+        "trap": "anchors to 10 cents"
+    },
+    # Trap: 5 machines → 5 minutes, not 100
+    {
+        "q": "If 5 machines take 5 minutes to make 5 widgets, how many minutes do 100 machines need to make 100 widgets?",
+        "a": "5",
+        "tier": "trap",
+        "trap": "scales linearly to 100"
+    },
+    # Trap: lily pad doubles → people guess day 47 or 48
+    {
+        "q": "A lily pad patch doubles in size every day. It takes 48 days to cover the whole lake. How many days to cover half the lake?",
+        "a": "47",
+        "tier": "trap",
+        "trap": "guesses 24"
+    },
+
+    # --- Multi-step arithmetic with a tempting wrong shortcut ---
+    # Trap: misapply BODMAS / operator precedence
+    {
+        "q": "What is 8 ÷ 2(2+2)?",
+        "a": "16",
+        "tier": "trap",
+        "trap": "gets 1 by distributing before dividing"
+    },
+    # Trap: percentage of percentage confusion
+    {
+        "q": "A price increases by 20% then decreases by 20%. What is the net percentage change?",
+        "a": "-4",
+        "tier": "trap",
+        "trap": "says 0 percent net change"
+    },
+    # Trap: compound interest vs simple interest confusion
+    {
+        "q": "You have $100. It grows 10% per year for 2 years compounded. What is the final amount in dollars?",
+        "a": "121",
+        "tier": "trap",
+        "trap": "says $120 using simple interest"
+    },
+
+    # --- Historical anchoring traps ---
+    # Trap: WWI ended Nov 11 armistice but treaty was 1919
+    {
+        "q": "In what year was the Treaty of Versailles signed?",
+        "a": "1919",
+        "tier": "trap",
+        "trap": "anchors to 1918 (armistice year)"
+    },
+    # Trap: first iPhone announced Jan 2007, shipped June 2007
+    {
+        "q": "In what month and year did the first iPhone go on sale to the public?",
+        "a": "june 2007",
+        "tier": "trap",
+        "trap": "says January 2007 (announcement date)"
+    },
+    # Trap: Neil Armstrong walked on Moon, but Gagarin was first in space
+    {
+        "q": "Who was the first human to travel to outer space?",
+        "a": "Gagarin",
+        "tier": "trap",
+        "trap": "says Neil Armstrong"
+    },
+
+    # --- Logic / syllogism traps ---
+    # Trap: confuses necessary and sufficient conditions
+    {
+        "q": "All roses are flowers. Some flowers fade quickly. Therefore, do some roses fade quickly? Answer yes or no.",
+        "a": "no",
+        "tier": "trap",
+        "trap": "says yes (invalid syllogism)"
+    },
+    # Trap: base rate neglect
+    {
+        "q": "A test for a disease is 99% accurate. The disease affects 1 in 10000 people. You test positive. Roughly what is the probability you have the disease? Answer: less than 1%, about 50%, or over 99%?",
+        "a": "less than 1",
+        "tier": "trap",
+        "trap": "says over 99% (ignores base rate)"
+    },
+
+    # --- Easy controls (should stay calibrated) ---
+    {
+        "q": "Capital of Japan?",
+        "a": "Tokyo",
+        "tier": "easy",
+        "trap": "none"
+    },
+    {
+        "q": "What is 12 multiplied by 12?",
+        "a": "144",
+        "tier": "easy",
+        "trap": "none"
+    },
+    {
+        "q": "What is the chemical symbol for gold?",
+        "a": "Au",
+        "tier": "easy",
+        "trap": "none"
+    },
+]
+
+# ================== BUDGETS ==================
+BUDGETS = [
+    {"label": "no_reasoning",     "max_tokens": 80,   "instruction": "Answer immediately. No reasoning. Output JSON only."},
+    {"label": "light_reasoning",  "max_tokens": 300,  "instruction": "Think briefly (1-2 sentences), then answer."},
+    {"label": "medium_reasoning", "max_tokens": 700,  "instruction": "Think step-by-step before answering."},
+    {"label": "heavy_reasoning",  "max_tokens": 1500, "instruction": "Reason very carefully and extensively before answering."},
+]
+
+# ================== HELPERS ==================
+def normalize(s):
+    return re.sub(r"[^a-z0-9]", "", str(s).lower())
+
+def is_correct(pred, target):
+    p, t = normalize(pred), normalize(target)
+    return p == t or t in p or p in t
+
+def binned_ece(confidences, corrects, n_bins=5):
+    confidences = np.array(confidences, dtype=float)
+    corrects    = np.array(corrects,    dtype=float)
+    bin_edges   = np.linspace(0, 1, n_bins + 1)
+    ece         = 0.0
+    n           = len(confidences)
+    bin_data    = []
+
+    for i in range(n_bins):
+        lo, hi = bin_edges[i], bin_edges[i+1]
+        mask   = (confidences >= lo) & (confidences < hi)
+        if mask.sum() == 0:
+            bin_data.append({"bin_mid": (lo+hi)/2, "acc": None, "conf": None, "count": 0})
+            continue
+        bin_acc  = corrects[mask].mean()
+        bin_conf = confidences[mask].mean()
+        bin_frac = mask.sum() / n
+        ece     += bin_frac * abs(bin_conf - bin_acc)
+        bin_data.append({
+            "bin_mid": (lo+hi)/2,
+            "acc":  round(float(bin_acc),  3),
+            "conf": round(float(bin_conf), 3),
+            "count": int(mask.sum())
+        })
+    return round(ece, 4), bin_data
+
+# ================== QUERY ==================
+def query_model(question, budget):
+    prompt = f"""{budget['instruction']}
+
+Question: {question}
+
+After your reasoning (if any), output ONLY this JSON on the LAST line:
+{{"answer":"<your answer>","confidence":<float 0.0-1.0>}}
+
+Confidence guide:
+0.5 = genuinely unsure
+0.7 = somewhat confident
+0.85 = confident
+0.95 = very confident
+1.0 = absolutely certain
+
+Be honest — if you're not sure, use 0.5 or 0.6, not 0.95."""
+
+    try:
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=budget["max_tokens"],
+            temperature=0.3,
+        )
+        raw = response.choices[0].message.content.strip()
+        json_matches = re.findall(r'\{[^{}]+\}', raw)
+        if not json_matches:
+            return "", 0.5, raw
+        parsed = json.loads(json_matches[-1])
+        answer = str(parsed.get("answer", ""))
+        conf   = float(parsed.get("confidence", 0.5))
+        conf   = max(0.0, min(1.0, conf))
+        return answer, conf, raw
+    except Exception as e:
+        return "", 0.5, str(e)
+
+# ================== RUN ==================
+results = []
+print(f"Running {len(BUDGETS)} budgets × {len(QUESTIONS)} questions = {len(BUDGETS)*len(QUESTIONS)} calls\n")
+
+for budget in BUDGETS:
+    print(f"  Budget: {budget['label']} (max_tokens={budget['max_tokens']})")
+    for q in QUESTIONS:
+        answer, conf, raw = query_model(q["q"], budget)
+        corr = int(is_correct(answer, q["a"]))
+        results.append({
+            "budget_label": budget["label"],
+            "max_tokens":   budget["max_tokens"],
+            "question":     q["q"][:50],
+            "tier":         q["tier"],
+            "trap":         q["trap"],
+            "expected":     q["a"],
+            "predicted":    answer,
+            "confidence":   conf,
+            "correct":      corr,
+        })
+        status = "✓" if corr else "✗"
+        print(f"    {status} conf={conf:.2f} | {q['q'][:45]} | Got: {answer[:20]}")
+    print()
+
+df = pd.DataFrame(results)
+
+# ================== METRICS TABLE ==================
+print("\n" + "="*70)
+print(f"{'Budget':<22} {'Acc':>6} {'Conf':>6} {'ECE':>7} {'Overconf':>10}")
+print("="*70)
+
+summary = []
+for budget in BUDGETS:
+    sub  = df[df["budget_label"] == budget["label"]]
+    acc  = round(sub["correct"].mean(), 3)
+    conf = round(sub["confidence"].mean(), 3)
+    ece, _ = binned_ece(sub["confidence"].tolist(), sub["correct"].tolist())
+    overconf = round(conf - acc, 3)
+    tag = "OVERCONF" if overconf > 0.05 else ("underconf" if overconf < -0.05 else "calibrated")
+    summary.append({"label": budget["label"], "max_tokens": budget["max_tokens"],
+                     "acc": acc, "conf": conf, "ece": ece, "overconf": overconf})
+    print(f"{budget['label']:<22} {acc:>6} {conf:>6} {ece:>7} {overconf:>8}  {tag}")
+print("="*70)
+
+# ---- Trap-only breakdown ----
+print("\nTRAP questions only:")
+print(f"{'Budget':<22} {'Acc':>6} {'Conf':>6} {'ECE':>7} {'Overconf':>10}")
+print("-"*55)
+trap_summary = []
+for budget in BUDGETS:
+    sub = df[(df["tier"] == "trap") & (df["budget_label"] == budget["label"])]
+    if len(sub) == 0: continue
+    acc  = round(sub["correct"].mean(), 3)
+    conf = round(sub["confidence"].mean(), 3)
+    ece, _ = binned_ece(sub["confidence"].tolist(), sub["correct"].tolist())
+    overconf = round(conf - acc, 3)
+    trap_summary.append({"label": budget["label"], "acc": acc, "conf": conf,
+                          "ece": ece, "overconf": overconf})
+    print(f"{budget['label']:<22} {acc:>6} {conf:>6} {ece:>7} {overconf:>8}")
+
+# ================== PLOTS ==================
+fig = plt.figure(figsize=(18, 12))
+fig.suptitle("CoT Reasoning Budget vs Calibration — Reasoning-Trap Questions\n(Llama 3.1 8B)",
+             fontsize=14, fontweight='bold')
+
+labels    = [s["label"].replace("_", "\n") for s in summary]
+accs      = [s["acc"]      for s in summary]
+confs     = [s["conf"]     for s in summary]
+eces      = [s["ece"]      for s in summary]
+overconfs = [s["overconf"] for s in summary]
+x         = np.arange(len(labels))
+width     = 0.35
+
+# ---- Plot 1: Acc vs Conf ----
+ax1 = fig.add_subplot(2, 3, 1)
+ax1.bar(x - width/2, accs,  width, label="Accuracy",   color="#5DCAA5", alpha=0.85)
+ax1.bar(x + width/2, confs, width, label="Confidence", color="#7F77DD", alpha=0.85)
+ax1.set_title("Accuracy vs Confidence (all)")
+ax1.set_xticks(x); ax1.set_xticklabels(labels, fontsize=8)
+ax1.set_ylim(0, 1.15); ax1.legend(fontsize=9); ax1.set_ylabel("Score")
+
+# ---- Plot 2: ECE ----
+ax2 = fig.add_subplot(2, 3, 2)
+colors = ["#5DCAA5" if e < 0.1 else "#EF9F27" if e < 0.2 else "#E24B4A" for e in eces]
+ax2.bar(x, eces, color=colors, alpha=0.85)
+ax2.set_title("ECE by Budget\n(lower = better)")
+ax2.set_xticks(x); ax2.set_xticklabels(labels, fontsize=8); ax2.set_ylabel("ECE")
+ax2.legend(handles=[
+    mpatches.Patch(color="#5DCAA5", label="Good (<0.10)"),
+    mpatches.Patch(color="#EF9F27", label="Moderate (0.10–0.20)"),
+    mpatches.Patch(color="#E24B4A", label="Poor (>0.20)"),
+], fontsize=8)
+
+# ---- Plot 3: Overconfidence gap ----
+ax3 = fig.add_subplot(2, 3, 3)
+bar_colors = ["#E24B4A" if o > 0.05 else "#5DCAA5" if o < -0.05 else "#888780" for o in overconfs]
+ax3.bar(x, overconfs, color=bar_colors, alpha=0.85)
+ax3.axhline(0,    color='black',  linewidth=0.8)
+ax3.axhline(0.05, color='orange', linestyle='--', linewidth=0.8, label="+0.05 threshold")
+ax3.axhline(-0.05,color='orange', linestyle='--', linewidth=0.8)
+ax3.set_title("Overconfidence Gap\n(conf − acc)")
+ax3.set_xticks(x); ax3.set_xticklabels(labels, fontsize=8)
+ax3.set_ylabel("Conf − Acc"); ax3.legend(fontsize=8)
+
+# ---- Plot 4: TRAP-only ECE (the key chart) ----
+ax4 = fig.add_subplot(2, 3, 4)
+if trap_summary:
+    t_labels = [s["label"].replace("_", "\n") for s in trap_summary]
+    t_eces   = [s["ece"] for s in trap_summary]
+    t_x      = np.arange(len(t_labels))
+    t_colors = ["#5DCAA5" if e < 0.1 else "#EF9F27" if e < 0.2 else "#E24B4A" for e in t_eces]
+    ax4.bar(t_x, t_eces, color=t_colors, alpha=0.85)
+    ax4.set_title("ECE on TRAP questions only\n★ This is your paper's key finding ★")
+    ax4.set_xticks(t_x); ax4.set_xticklabels(t_labels, fontsize=8); ax4.set_ylabel("ECE")
+
+# ---- Plot 5 & 6: Reliability diagrams for no_reasoning vs heavy_reasoning ----
+for idx, budget_label in enumerate(["no_reasoning", "heavy_reasoning"]):
+    ax = fig.add_subplot(2, 3, 5 + idx)
+    sub = df[df["budget_label"] == budget_label]
+    _, bin_data = binned_ece(sub["confidence"].tolist(), sub["correct"].tolist(), n_bins=10)
+
+    bin_mids = [b["bin_mid"] for b in bin_data if b["acc"] is not None]
+    bin_accs = [b["acc"]     for b in bin_data if b["acc"] is not None]
+    bin_confs= [b["conf"]    for b in bin_data if b["acc"] is not None]
+    counts   = [b["count"]   for b in bin_data if b["acc"] is not None]
+
+    ax.plot([0, 1], [0, 1], 'k--', linewidth=1, label="Perfect calibration")
+    ax.bar(bin_mids, bin_accs, width=0.08, alpha=0.6, color="#7F77DD", label="Accuracy in bin")
+    ax.scatter(bin_confs, bin_accs, color="#E24B4A", zorder=5, s=60, label="(conf, acc) point")
+
+    # Annotate counts
+    for bm, ba, bc, cnt in zip(bin_mids, bin_accs, bin_confs, counts):
+        ax.annotate(f"n={cnt}", (bm, ba + 0.03), fontsize=6, ha='center', color='gray')
+
+    ax.set_xlim(0, 1); ax.set_ylim(0, 1.1)
+    ax.set_xlabel("Confidence"); ax.set_ylabel("Accuracy")
+    ax.set_title(f"Reliability Diagram\n{budget_label.replace('_', ' ').title()}")
+    ax.legend(fontsize=7)
+
+plt.tight_layout()
+plt.savefig("cot_trap_calibration.png", dpi=150, bbox_inches='tight')
+plt.show()
+print("\nPlot saved to cot_trap_calibration.png")
+
+# ================== PRINT WRONG-AND-CONFIDENT ==================
+print("\n--- Wrong + high confidence (the smoking gun) ---")
+wrong_conf = df[(df["correct"] == 0) & (df["confidence"] >= 0.85)]
+if len(wrong_conf):
+    print(wrong_conf[["budget_label", "question", "expected", "predicted", "confidence", "trap"]].to_string(index=False))
+else:
+    print("None found — questions may be too easy or model too good.")
