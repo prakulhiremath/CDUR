@@ -5,8 +5,11 @@
 > Prakul Sunil Hiremath · Harshit R Hiremath
 > VTU Belagavi / SG Balekundri Institute of Technology
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19709379.svg)](https://doi.org/10.5281/zenodo.19709379)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
+[![arXiv](https://img.shields.io/badge/arXiv-2606.11211-B31B1B.svg?style=flat-square&logo=arxiv&logoColor=white)](https://arxiv.org/abs/2606.11211)
+[![Medium](https://img.shields.io/badge/Medium-Story-12100E.svg?style=flat-square&logo=medium&logoColor=white)](https://medium.com/@prakulhiremath/the-ai-that-thinks-too-hard-and-gets-dangerously-wrong-7f3c32e62864)
+[![DOI](https://img.shields.io/badge/DOI-10.5281/zenodo.19709379-0266A4.svg?style=flat-square)](https://doi.org/10.5281/zenodo.19709379)
+[![GitHub](https://img.shields.io/badge/GitHub-CDUR-181717.svg?style=flat-square&logo=github&logoColor=white)](https://github.com/prakulhiremath/CDUR)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](https://github.com/prakulhiremath/CDUR/blob/main/LICENSE)[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 ---
