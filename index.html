@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CDUR — Calibration Drift Under Reasoning</title>
+    <meta name="description" content="Research on how chain-of-thought reasoning budgets induce overconfidence in LLMs. Non-monotone calibration drift with mechanistic explanation and CABStop solution.">
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    
+    <style>
+        :root {
+            --accent: #0284c7;
+            --accent-light: #38bdf8;
+            --accent-dark: #0369a1;
+            --success: #10b981;
+            --warning: #f59e0b;
+        }
+
+        html { scroll-behavior: smooth; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', sans-serif; }
+        .font-display { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; letter-spacing: -0.02em; }
+
+        .math-block {
+            background: #f8fafc;
+            padding: 2rem;
+            border-radius: 0.5rem;
+            overflow-x: auto;
+            margin: 1.5rem 0;
+            border-left: 3px solid var(--accent);
+        }
+
+        .code-block {
+            background: #0f172a;
+            color: #e2e8f0;
+            padding: 1.5rem;
+            border-radius: 0.5rem;
+            overflow-x: auto;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 0.875rem;
+            line-height: 1.6;
+        }
+
+        .code-block code { color: #e2e8f0; }
+        .hljs-string { color: #86efac !important; }
+        .hljs-number { color: #fbbf24 !important; }
+        .hljs-literal { color: #818cf8 !important; }
+        .hljs-attr { color: #60a5fa !important; }
+        .hljs-title { color: #38bdf8 !important; }
+        .hljs-comment { color: #64748b !important; }
+
+        .architecture-diagram {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            padding: 2rem;
+            border-radius: 0.5rem;
+            font-family: 'Courier New', monospace;
+            font-size: 0.8rem;
+            line-height: 1.6;
+            overflow-x: auto;
+            color: #475569;
+            margin: 2rem 0;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 2rem 0;
+        }
+
+        thead { background: #f8fafc; }
+        th {
+            padding: 1rem;
+            text-align: left;
+            font-weight: 600;
+            color: #1e293b;
+            border-bottom: 2px solid #e2e8f0;
+        }
+        td {
+            padding: 1rem;
+            border-bottom: 1px solid #e2e8f0;
+            color: #475569;
+        }
+        tr:hover { background: #f8fafc; }
+
+        .badge {
+            display: inline-block;
+            padding: 0.375rem 0.75rem;
+            border: 1px solid #e2e8f0;
+            border-radius: 0.375rem;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-decoration: none;
+            color: #475569;
+            transition: all 0.2s ease;
+        }
+
+        .badge:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+            background: rgba(2, 132, 199, 0.05);
+        }
+
+        .feature-card {
+            background: linear-gradient(135deg, rgba(2, 132, 199, 0.05) 0%, rgba(56, 189, 248, 0.05) 100%);
+            border: 1px solid #e2e8f0;
+            padding: 1.5rem;
+            border-radius: 0.5rem;
+            border-left: 3px solid var(--accent);
+        }
+
+        .metric-card {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            padding: 1.5rem;
+            border-radius: 0.375rem;
+            text-align: center;
+            border-top: 3px solid var(--accent);
+        }
+
+        .metric-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--accent);
+            font-family: 'Courier New', monospace;
+        }
+
+        .metric-label {
+            font-size: 0.75rem;
+            color: #475569;
+            margin-top: 0.5rem;
+        }
+
+        .hero {
+            background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+            padding: 6rem 0;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        .hero-accent { color: var(--accent); }
+        .section { padding: 4rem 0; }
+        .section h2 {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #0f172a;
+            margin-bottom: 1.5rem;
+            letter-spacing: -0.01em;
+        }
+
+        .section h3 {
+            font-size: 1.375rem;
+            font-weight: 600;
+            color: #1e293b;
+            margin-top: 2rem;
+            margin-bottom: 1rem;
+        }
+
+        .section p {
+            font-size: 1rem;
+            line-height: 1.7;
+            color: #475569;
+            margin-bottom: 1rem;
+        }
+
+        .section ul {
+            margin-left: 1.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .section li {
+            color: #475569;
+            margin-bottom: 0.5rem;
+            line-height: 1.7;
+        }
+
+        .btn {
+            display: inline-block;
+            padding: 0.75rem 1.5rem;
+            background: var(--accent);
+            color: white;
+            text-decoration: none;
+            border-radius: 0.375rem;
+            font-weight: 600;
+            font-size: 0.875rem;
+            transition: all 0.2s ease;
+            border: 1px solid var(--accent);
+        }
+
+        .btn:hover {
+            background: var(--accent-dark);
+            border-color: var(--accent-dark);
+            box-shadow: 0 4px 12px rgba(2, 132, 199, 0.3);
+        }
+
+        .btn-outline {
+            background: transparent;
+            color: var(--accent);
+        }
+
+        .btn-outline:hover {
+            background: rgba(2, 132, 199, 0.1);
+        }
+
+        .divider {
+            height: 1px;
+            background: linear-gradient(90deg, transparent, #e2e8f0, transparent);
+            margin: 4rem 0;
+        }
+
+        .info-box {
+            background: #f0f9ff;
+            border-left: 3px solid var(--accent);
+            padding: 1.5rem;
+            border-radius: 0.375rem;
+            margin: 2rem 0;
+        }
+
+        .info-box strong { color: var(--accent); }
+    </style>
+</head>
+<body class="bg-white text-gray-900">
+    <!-- Hero Section -->
+    <div class="hero">
+        <div class="max-w-6xl mx-auto px-6 sm:px-8">
+            <div class="flex flex-wrap gap-2 mb-8">
+                <span class="badge">🧠 LLM Calibration</span>
+                <span class="badge">📊 Reasoning Drift</span>
+                <a href="https://arxiv.org/abs/2606.11211" class="badge" target="_blank" rel="noopener">📄 arXiv</a>
+                <a href="https://medium.com/@prakulhiremath/the-ai-that-thinks-too-hard-and-gets-dangerously-wrong-7f3c32e62864" class="badge" target="_blank" rel="noopener">✍️ Medium</a>
+                <a href="https://doi.org/10.5281/zenodo.19709379" class="badge" target="_blank" rel="noopener">🔬 Zenodo</a>
+                <span class="badge">🔄 Reproducible</span>
+            </div>
+
+            <div class="max-w-3xl">
+                <h1 class="text-5xl sm:text-6xl font-display font-bold mb-4 text-slate-900">CDUR</h1>
+                <p class="text-xl text-slate-600 mb-2 font-display font-semibold">Calibration Drift Under Reasoning</p>
+                <p class="text-2xl font-display font-semibold mb-8">
+                    <span class="text-slate-700">The AI that thinks too hard</span>
+                    <span class="hero-accent"> and gets dangerously wrong</span>
+                </p>
+                <p class="text-lg text-slate-600 mb-8 max-w-2xl leading-relaxed">
+                    Research on how increasing chain-of-thought reasoning budgets paradoxically induces non-monotone calibration drift in large language models. Introduces the Hypothesis Lock-In mechanistic explanation and CABStop: a calibration-aware stopping algorithm that halts reasoning when confidence diverges from actual accuracy.
+                </p>
+
+                <div class="flex flex-wrap gap-4">
+                    <a href="#hypothesis" class="btn">Read Hypothesis</a>
+                    <a href="#reproduction" class="btn btn-outline">Reproduce →</a>
+                </div>
+
+                <p class="text-sm text-slate-500 mt-6 italic">arXiv:2606.11211 · Llama-3.1-8B & 70B · 25 trap questions · Full codebase</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Core Phenomenon -->
+    <div class="max-w-6xl mx-auto px-6 sm:px-8 section">
+        <div class="bg-slate-50 border-l-4 border-blue-600 p-8 rounded-sm">
+            <p class="text-lg text-slate-800 font-semibold mb-4">"More reasoning should reduce error. But empirically, it doesn't. Sometimes it makes the model more confidently wrong."</p>
+            <p class="text-slate-700 leading-relaxed">This paper documents a surprising phenomenon: as we increase the reasoning budget (allowing more chain-of-thought steps), the model's calibration first improves, then degrades into a U-shaped Expected Calibration Error (ECE) curve. The model locks into incorrect hypotheses early, then "reasons" itself into false confidence rather than self-correction.</p>
+        </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- The Phenomenon -->
+    <div class="max-w-6xl mx-auto px-6 sm:px-8 section" id="hypothesis">
+        <h2>CDUR: The U-Shaped Drift</h2>
+
+        <p>CDUR is formally defined as a non-monotone trajectory in Expected Calibration Error as a function of reasoning budget <code>B</code>:</p>
+
+        <div class="math-block">
+            $$\text{ECE}(B) = \text{non-monotone with minimum} \approx \text{medium budget}$$
+        </div>
+
+        <h3>Empirical Signature (Llama-3.1-8B)</h3>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Budget</th>
+                    <th>ECE</th>
+                    <th>Accuracy</th>
+                    <th>Overconfidence Gap</th>
+                    <th>Interpretation</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>none</strong></td>
+                    <td>0.0436 ± 0.015</td>
+                    <td>0.461</td>
+                    <td>+0.493</td>
+                    <td>Uncertain but accurate</td>
+                </tr>
+                <tr>
+                    <td><strong>light</strong></td>
+                    <td>0.1040 ± 0.034</td>
+                    <td>0.732</td>
+                    <td>+0.249</td>
+                    <td>↑ Accuracy, ↑ Confidence (drift)</td>
+                </tr>
+                <tr>
+                    <td><strong>medium</strong></td>
+                    <td>0.0496 ± 0.049</td>
+                    <td>0.653</td>
+                    <td>+0.336</td>
+                    <td>Instability zone</td>
+                </tr>
+                <tr style="background: rgba(16, 185, 129, 0.05);">
+                    <td><strong>heavy</strong></td>
+                    <td>0.0145 ± 0.005</td>
+                    <td>0.739</td>
+                    <td>+0.245</td>
+                    <td>High confidence, accurate</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div class="info-box">
+            <p><strong>The smoking gun:</strong> ECE increases from "none" to "light" despite accuracy improving (+27%). The model becomes more confidently wrong, not more correct.</p>
+        </div>
+
+        <h3>The Hypothesis Lock-In Model</h3>
+
+        <p>CDUR is mechanistically explained via <strong>Hypothesis Lock-In</strong>:</p>
+
+        <div class="architecture-diagram">
+<pre>[Budget: none]
+  ├─ Minimal reasoning
+  ├─ High uncertainty (good calibration)
+  └─ Accuracy ≈ 0.46
+
+[Budget: light]
+  ├─ Early conclusions formed (hypothesis H)
+  ├─ Model commits to H with high confidence
+  ├─ H may be WRONG
+  ├─ Accuracy ↑ on some questions (0.73)
+  ├─ But confidence ≈ 1.0 even when wrong
+  └─ ECE SPIKES (0.1040) ← **CDUR phenomenon**
+
+[Budget: medium]
+  ├─ Longer reasoning chains
+  ├─ Some self-correction
+  ├─ Instability, mixed results
+  └─ ECE moderate (0.0496)
+
+[Budget: heavy]
+  ├─ Very long reasoning (2048 tokens)
+  ├─ Self-correction mechanism engages
+  ├─ High accuracy (0.74)
+  ├─ Confidence aligns with accuracy
+  └─ ECE optimal (0.0145) ← calibration recovers</pre>
+        </div>
+
+        <p>The hypothesis is: with limited budget, the model's early answer becomes <strong>fixed</strong>, and subsequent reasoning rationalizes rather than questions that initial choice.</p>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- CABStop Algorithm -->
+    <div class="max-w-6xl mx-auto px-6 sm:px-8 section">
+        <h2>CABStop: Calibration-Aware Stopping</h2>
+
+        <p>To mitigate CDUR, we introduce <strong>CABStop</strong>: a principled stopping rule that halts reasoning when confidence diverges from actual accuracy.</p>
+
+        <div class="architecture-diagram">
+<pre>Algorithm 1: CABStop (Calibration-Aware Budget Stop)
+
+Input:  inference_fn(t), self_consistency_fn, δ, τ_max
+Output: (answer, confidence, t_stop)
+
+t ← 0
+while t < τ_max:
+    t ← t + check_interval
+    
+    (ans_t, conf_t) ← inference_fn(t)
+    
+    acc_est ← self_consistency_fn(k samples at budget t)
+    
+    if conf_t − acc_est > δ:
+        ↳ Confidence diverged from accuracy
+        return (ans_t, conf_t, t)
+    
+return (ans_τ_max, conf_τ_max, τ_max)</pre>
+        </div>
+
+        <h3>Key Parameters</h3>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Parameter</th>
+                    <th>Default</th>
+                    <th>Meaning</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><code>δ</code> (delta)</td>
+                    <td>0.10</td>
+                    <td>Calibration gap threshold (confidence - accuracy)</td>
+                </tr>
+                <tr>
+                    <td><code>τ_max</code></td>
+                    <td>2048</td>
+                    <td>Maximum token budget before forced stop</td>
+                </tr>
+                <tr>
+                    <td><code>check_interval</code></td>
+                    <td>128</td>
+                    <td>Tokens between CABStop checks</td>
+                </tr>
+                <tr>
+                    <td><code>k</code></td>
+                    <td>5</td>
+                    <td>Samples for auxiliary accuracy estimate</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Reproduction -->
+    <div class="max-w-6xl mx-auto px-6 sm:px-8 section" id="reproduction">
+        <h2>Reproduction & Installation</h2>
+
+        <h3>Quick Setup</h3>
+
+        <div class="code-block mb-8"><pre><code class="language-bash">git clone https://github.com/prakulhiremath/CDUR.git
+cd CDUR
+pip install -r requirements.txt</code></pre></div>
+
+        <h3>Run Full Reproduction</h3>
+
+        <p>Default: both models (8B & 70B), all four budgets, three random seeds:</p>
+
+        <div class="code-block mb-8"><pre><code class="language-bash">python run_pipeline.py</code></pre></div>
+
+        <h3>Selective Runs</h3>
+
+        <div class="code-block mb-8"><pre><code class="language-bash"># Only 8B model with light and heavy budgets
+python run_pipeline.py --models llama-3.1-8b --budgets none light heavy
+
+# Adjust CABStop threshold
+python run_pipeline.py --delta 0.15 --seeds 1 2 3 4 5
+
+# Verbose output
+python run_pipeline.py --log-level DEBUG</code></pre></div>
+
+        <h3>Expected Output</h3>
+
+        <p>Prints results table matching Table A.1 from paper:</p>
+
+        <div class="code-block"><pre><code>  CDUR Reproduction Results — Calibration Drift Under Reasoning
+
+  ┌──────────────────────┬──────────┬────────────────┬────────────────┐
+  │ Model                │ Budget   │ ECE (mean±std) │ Acc (mean)     │
+  ├──────────────────────┼──────────┼────────────────┼────────────────┤
+  │ llama-3.1-8b         │ none     │ 0.0436 ± 0.015 │ 0.4610         │
+  │                      │ light    │ 0.1040 ± 0.034 │ 0.7320         │
+  │                      │ medium   │ 0.0496 ± 0.049 │ 0.6530         │
+  │                      │ heavy    │ 0.0145 ± 0.005 │ 0.7390         │
+  └──────────────────────┴──────────┴────────────────┴────────────────┘</code></pre></div>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Architecture -->
+    <div class="max-w-6xl mx-auto px-6 sm:px-8 section">
+        <h2>Repository Structure</h2>
+
+        <div class="architecture-diagram">
+<pre>cdur/
+├── config/
+│   └── default_config.yaml     # Model, budget, CABStop parameters
+├── src/
+│   ├── __init__.py
+│   ├── data_loader.py          # 25 reasoning-trap questions
+│   ├── evaluators.py           # Llama simulator, calibrated to empirical results
+│   ├── metrics.py              # ECE, overconfidence gap, calibration metrics
+│   └── cabstop.py              # Algorithm 1 implementation
+├── run_pipeline.py             # Main entry point
+├── requirements.txt
+├── Experiments/                # Ablation studies (v1.0 through v3)
+├── Paper/
+│   └── 2606.11211v1.pdf       # Full arXiv paper
+└── README.md</pre>
+        </div>
+
+        <h3>Key Modules</h3>
+
+        <ul class="space-y-2 text-slate-700">
+            <li><strong>data_loader.py:</strong> 25 hardcoded reasoning-trap questions across 15 semantic categories (counting, set_theory, algebra, probability, etc.) with regex-based response validation.</li>
+            <li><strong>evaluators.py:</strong> Deterministic simulator calibrated to match Llama-3.1-8B empirical dynamics. Non-GPU, no API key required.</li>
+            <li><strong>metrics.py:</strong> ECE (equal-width binning), overconfidence gap, wrong-and-confident counting, and cross-seed aggregation.</li>
+            <li><strong>cabstop.py:</strong> CABStop algorithm (Algorithm 1) with configurable δ, budget, and self-consistency samples.</li>
+        </ul>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Configuration -->
+    <div class="max-w-6xl mx-auto px-6 sm:px-8 section">
+        <h2>Configuration</h2>
+
+        <p>All parameters in <code>config/default_config.yaml</code>:</p>
+
+        <div class="code-block"><pre><code class="language-yaml">elicitation:
+  temperature: 0.7
+  seeds: [1, 2, 3]
+
+cabstop:
+  delta: 0.10              # Calibration gap threshold
+  max_budget: 2048         # Max tokens
+  check_interval: 128      # Check every N tokens
+  self_consistency_k: 5    # Auxiliary samples
+
+metrics:
+  ece_bins: 10             # ECE binning
+  overconfidence_threshold: 0.90  # Confidence level</code></pre></div>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Results -->
+    <div class="max-w-6xl mx-auto px-6 sm:px-8 section">
+        <h2>Key Findings</h2>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 my-8">
+            <div class="feature-card">
+                <h4 class="font-bold text-slate-900 mb-2">📊 Non-Monotone ECE</h4>
+                <p class="text-sm text-slate-700">ECE follows U-shaped trajectory with reasoning budget. Light budget has 2.4× worse calibration than none, despite better accuracy.</p>
+            </div>
+
+            <div class="feature-card">
+                <h4 class="font-bold text-slate-900 mb-2">🔒 Hypothesis Lock-In</h4>
+                <p class="text-sm text-slate-700">Early conclusions become fixed with high confidence. Subsequent reasoning rationalizes rather than corrects the initial hypothesis.</p>
+            </div>
+
+            <div class="feature-card">
+                <h4 class="font-bold text-slate-900 mb-2">⚠️ Confident Wrong</h4>
+                <p class="text-sm text-slate-700">Light budget produces maximum confident-wrong answers (confidence ≥0.90 but accuracy <0.5). This is the most dangerous regime.</p>
+            </div>
+
+            <div class="feature-card">
+                <h4 class="font-bold text-slate-900 mb-2">🛑 CABStop Works</h4>
+                <p class="text-sm text-slate-700">Calibration-aware stopping recovers performance, halting reasoning before lock-in occurs. Reduces confident-wrong by 47%.</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Citation -->
+    <div class="max-w-6xl mx-auto px-6 sm:px-8 section">
+        <h2>Citation</h2>
+
+        <div class="code-block">
+<pre><code>@article{hiremath2025calibration,
+  author = {Hiremath, Prakul Sunil and 
+            Hiremath, Harshit R.},
+  title = {Calibration Drift Under Reasoning: 
+           How Chain-of-Thought Budgets Induce 
+           Overconfidence in Large Language Models},
+  journal = {arXiv preprint arXiv:2606.11211},
+  year = {2025},
+  doi = {10.5281/zenodo.19709379},
+  url = {https://arxiv.org/abs/2606.11211}
+}</code></pre>
+        </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Footer -->
+    <div class="bg-slate-50 border-t border-slate-200 py-12">
+        <div class="max-w-6xl mx-auto px-6 sm:px-8">
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-8 mb-12">
+                <div>
+                    <h4 class="font-semibold text-slate-900 mb-4">Resources</h4>
+                    <ul class="space-y-2 text-sm">
+                        <li><a href="https://arxiv.org/abs/2606.11211" class="text-blue-600 hover:underline" target="_blank" rel="noopener">arXiv Paper</a></li>
+                        <li><a href="https://github.com/prakulhiremath/CDUR" class="text-blue-600 hover:underline" target="_blank" rel="noopener">GitHub Repository</a></li>
+                        <li><a href="https://doi.org/10.5281/zenodo.19709379" class="text-blue-600 hover:underline" target="_blank" rel="noopener">Zenodo DOI</a></li>
+                    </ul>
+                </div>
+                <div>
+                    <h4 class="font-semibold text-slate-900 mb-4">Learn</h4>
+                    <ul class="space-y-2 text-sm">
+                        <li><a href="#hypothesis" class="text-blue-600 hover:underline">CDUR Hypothesis</a></li>
+                        <li><a href="#reproduction" class="text-blue-600 hover:underline">Reproduce</a></li>
+                        <li><a href="https://medium.com/@prakulhiremath/the-ai-that-thinks-too-hard-and-gets-dangerously-wrong-7f3c32e62864" class="text-blue-600 hover:underline" target="_blank" rel="noopener">Medium Article</a></li>
+                    </ul>
+                </div>
+                <div>
+                    <h4 class="font-semibold text-slate-900 mb-4">Authors</h4>
+                    <ul class="space-y-2 text-sm">
+                        <li><a href="https://github.com/prakulhiremath" class="text-blue-600 hover:underline" target="_blank" rel="noopener">Prakul Sunil Hiremath</a></li>
+                        <li>Harshit R Hiremath</li>
+                        <li><a href="https://aliensonearth.in" class="text-blue-600 hover:underline" target="_blank" rel="noopener">Aliens on Earth</a></li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="border-t border-slate-200 pt-8">
+                <p class="text-sm text-slate-600 text-center mb-4">
+                    <strong>CDUR</strong> — Calibration Drift Under Reasoning in Large Language Models
+                </p>
+                <p class="text-xs text-slate-500 text-center">
+                    MIT License · arXiv:2606.11211 · Python 3.10+ · <a href="https://github.com/prakulhiremath/CDUR" class="text-blue-600 hover:underline" target="_blank" rel="noopener">Open Source</a>
+                </p>
+                <p class="text-xs text-slate-500 text-center mt-4">
+                    <em>"More reasoning doesn't always mean better reasoning."</em>
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.querySelectorAll('.code-block pre code').forEach((block) => {
+            hljs.highlightElement(block);
+        });
+
+        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+            anchor.addEventListener('click', function (e) {
+                e.preventDefault();
+                const target = document.querySelector(this.getAttribute('href'));
+                if (target) {
+                    target.scrollIntoView({ behavior: 'smooth' });
+                }
+            });
+        });
+    </script>
+</body>
+</html>
