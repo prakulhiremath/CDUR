@@ -200,14 +200,17 @@ To run against a real LLM API, replace the `_simulate_response` function in `src
 If you use this codebase or build on the CDUR framework, please cite:
 
 ```bibtex
-@misc{hiremath2025cdur,
-  title     = {Calibration Drift Under Reasoning: How Chain-of-Thought Budgets
-               Induce Overconfidence in Large Language Models},
-  author    = {Hiremath, Prakul Sunil and Hiremath, Harshit R},
+
+@article{hiremath2025calibration,
+  author    = {Hiremath, Prakul Sunil and Hiremath, Harshit R.},
+  title     = {Calibration Drift Under Reasoning: How Chain-of-Thought Budgets Induce Overconfidence in Large Language Models},
+  journal   = {arXiv preprint arXiv:2606.11211},
   year      = {2025},
   doi       = {10.5281/zenodo.19709379},
-  url       = {https://doi.org/10.5281/zenodo.19709379}
+  url       = {https://arxiv.org/abs/2606.11211},
+  note      = {Code available at \url{https://github.com/prakulhiremath/CDUR}. Post commentary available at Medium (\url{https://medium.com/@prakulhiremath/the-ai-that-thinks-too-hard-and-gets-dangerously-wrong-7f3c32e62864})}
 }
+
 ```
 
 ---
