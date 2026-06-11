@@ -3,7 +3,7 @@
 > **Calibration Drift Under Reasoning: How Chain-of-Thought Budgets Induce Overconfidence in Large Language Models**
 >
 > Prakul Sunil Hiremath · Harshit R Hiremath
-> [Aliens on Earth)](https://aliensonearth.in)
+> [(Aliens on Earth)](https://aliensonearth.in)
 
 [![arXiv](https://img.shields.io/badge/arXiv-2606.11211-B31B1B.svg?style=flat-square&logo=arxiv&logoColor=white)](https://arxiv.org/abs/2606.11211)
 [![Medium](https://img.shields.io/badge/Medium-Story-12100E.svg?style=flat-square&logo=medium&logoColor=white)](https://medium.com/@prakulhiremath/the-ai-that-thinks-too-hard-and-gets-dangerously-wrong-7f3c32e62864)
