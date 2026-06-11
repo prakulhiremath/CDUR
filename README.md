@@ -43,6 +43,15 @@ cdur/
 │   └── cabstop.py              # CABStop algorithm (Algorithm 1 from paper)
 ├── run_pipeline.py             # Main entry point
 ├── requirements.txt
+├── Experiments/
+│   ├── v1.0.py       
+│   ├── v1.1.py         
+│   ├── v1.2.py         
+│   ├── v1.3.py          
+│   ├── v2.py             
+│   └── v3.py
+├── Paper
+│   ├── 2606.11211v1.pdf   
 └── README.md
 ```
 
