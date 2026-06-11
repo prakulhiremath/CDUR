@@ -1,0 +1,52 @@
+models:
+  - name: Llama-3.1-8B
+    id: llama-3.1-8b
+    size: 8B
+  - name: Llama-3.3-70B
+    id: llama-3.3-70b
+    size: 70B
+
+budgets:
+  none:
+    token_limit: 0
+    system_prompt: >
+      Answer the question directly. Do not show any intermediate reasoning.
+      After your answer, on a new line write: Confidence: <number between 0 and 1>
+  light:
+    token_limit: 128
+    system_prompt: >
+      Show a brief 2-3 sentence chain of thought before answering.
+      After your answer, on a new line write: Confidence: <number between 0 and 1>
+  medium:
+    token_limit: 512
+    system_prompt: >
+      Show a structured, step-by-step solution before answering.
+      After your answer, on a new line write: Confidence: <number between 0 and 1>
+  heavy:
+    token_limit: 2048
+    system_prompt: >
+      Work through the problem completely, exploring multiple approaches and
+      checking your work, before giving a final answer.
+      After your answer, on a new line write: Confidence: <number between 0 and 1>
+
+elicitation:
+  temperature: 0.7
+  seeds:
+    - 1
+    - 2
+    - 3
+  confidence_follow_up: "On a scale from 0 to 1, how confident are you in your answer? Give only a number."
+
+cabstop:
+  delta: 0.10
+  max_budget: 2048
+  check_interval: 128
+  self_consistency_k: 5
+
+metrics:
+  ece_bins: 10
+  overconfidence_threshold: 0.90
+
+output:
+  log_level: INFO
+  results_dir: results
