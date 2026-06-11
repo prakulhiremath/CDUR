@@ -1,0 +1,37 @@
+cff-version: 1.2.0
+message: "If you use this software or benchmark, please cite both the software metadata and the preferred academic paper."
+title: "CDUR: Calibration Drift Under Reasoning"
+abstract: "A research repository investigating Calibration Drift Under Reasoning (CDUR) and inference-time scaling miscalibration in large language models using the CABStop algorithm."
+type: software
+authors:
+  - family-names: "Hiremath"
+    given-names: "Prakul Sunil"
+    email: "hiremathprakul.aoe@gmail.com"
+  - family-names: "Hiremath"
+    given-names: "Harshit R."
+    email: "hiremathharshit.aoe@gmail.com"
+repository-code: "https://github.com/prakulhiremath/CDUR"
+url: "https://arxiv.org/abs/2606.11211"
+doi: "10.5281/zenodo.19709379"
+date-released: "2025-06-15"
+keywords:
+  - "calibration"
+  - "chain-of-thought"
+  - "large language models"
+  - "inference-time-scaling"
+  - "ai-safety"
+license: "MIT"
+
+# Redirects automatic citations directly to your companion preprint paper
+preferred-citation:
+  type: article
+  authors:
+    - family-names: "Hiremath"
+      given-names: "Prakul Sunil"
+    - family-names: "Hiremath"
+      given-names: "Harshit R."
+  title: "Calibration Drift Under Reasoning: How Chain-of-Thought Budgets Induce Overconfidence in Large Language Models"
+  journal: "arXiv preprint arXiv:2606.11211"
+  year: 2025
+  doi: "10.5281/zenodo.19709379"
+  url: "https://arxiv.org/abs/2606.11211"
